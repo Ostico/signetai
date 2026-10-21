@@ -894,6 +894,84 @@ describe("backfill replaces live-only sessions", () => {
 		expect(existsSync(join(root, "memory", ".canonical-transcript-backfill-v1.default"))).toBe(false);
 	});
 
+	function writeCollapsedLegacyRecords(
+		root: string,
+		sessionKey: string,
+		turns: ReadonlyArray<{ readonly role: string; readonly content: string }>,
+	): void {
+		const jsonlPath = canonicalTranscriptPath(root, "codex");
+		mkdirSync(dirname(jsonlPath), { recursive: true });
+		const lines = turns.map((turn, index) =>
+			JSON.stringify({
+				schema: "signet.transcript.v1",
+				id: `legacy-${index + 1}`,
+				captured_at: "2026-04-28T00:00:00.000Z",
+				agent_id: "default",
+				harness: "codex",
+				session_key: sessionKey,
+				session_id: sessionKey,
+				project: null,
+				seq: index + 1,
+				role: turn.role,
+				content: turn.content,
+				source_format: "markdown",
+				source_sha256: "legacy",
+			}),
+		);
+		writeFileSync(jsonlPath, `${lines.join("\n")}\n`, "utf8");
+	}
+
+	const collapsedLegacyTurns = [
+		{ role: "user", content: "legacy prompt" },
+		{ role: "unknown", content: "with a second line" },
+		{ role: "assistant", content: "reply with spaces" },
+	];
+	const originalLegacyTranscript = "User:  legacy   prompt\n  with  a second line\n\nAssistant: reply\twith  spaces  ";
+
+	test("settles the backfill marker when completed JSONL and Markdown differ only by collapsed whitespace", async () => {
+		const root = makeRoot("legacy-whitespace-markdown");
+		writeCollapsedLegacyRecords(root, "legacy-session", collapsedLegacyTurns);
+		writeTranscriptArtifact({
+			root,
+			fileName: "2026-04-28T00-00-00Z--legacysession0000--transcript.md",
+			sessionKey: "legacy-session",
+			transcript: originalLegacyTranscript,
+		});
+		await ensureCanonicalTranscriptHistory(root, "default");
+		expect(readJsonlLines(root)).toHaveLength(3);
+		expect(existsSync(join(root, "memory", ".canonical-transcript-backfill-v1.default"))).toBe(true);
+	});
+
+	test("settles the backfill marker when completed JSONL and a DB row differ only by collapsed whitespace", async () => {
+		const root = makeRoot("legacy-whitespace-db");
+		initTranscriptDb(root);
+		writeCollapsedLegacyRecords(root, "legacy-db-session", collapsedLegacyTurns);
+		getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) =>
+			db
+				.prepare(
+					`INSERT INTO session_transcripts (session_key, content, harness, project, agent_id, created_at, updated_at)
+					 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+				)
+				.run("legacy-db-session", originalLegacyTranscript, "codex", null, "default", "2026-04-28", "2026-04-28"),
+		);
+		await ensureCanonicalTranscriptHistory(root, "default");
+		expect(readJsonlLines(root)).toHaveLength(3);
+		expect(existsSync(join(root, "memory", ".canonical-transcript-backfill-v1.default"))).toBe(true);
+	});
+
+	test("still reports collapsed legacy records whose words differ from the Markdown", async () => {
+		const root = makeRoot("legacy-whitespace-divergence");
+		writeCollapsedLegacyRecords(root, "legacy-session", collapsedLegacyTurns);
+		writeTranscriptArtifact({
+			root,
+			fileName: "2026-04-28T00-00-00Z--legacysession0000--transcript.md",
+			sessionKey: "legacy-session",
+			transcript: originalLegacyTranscript.replace("spaces", "tabs"),
+		});
+		await ensureCanonicalTranscriptHistory(root, "default");
+		expect(existsSync(join(root, "memory", ".canonical-transcript-backfill-v1.default"))).toBe(false);
+	});
+
 	test("defers retries of an incomplete backfill with bounded backoff", async () => {
 		const root = makeRoot("deferred-backfill-retry");
 		await writeCanonicalTranscriptSnapshot({

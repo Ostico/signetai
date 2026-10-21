@@ -43,6 +43,7 @@ export interface TranscriptSessionKeyClassification {
 	readonly canonicalKeys: Set<string>;
 	readonly liveOnlyKeys: Set<string>;
 	readonly completedDigests: Map<string, string>;
+	readonly legacyCompletedDigests: Map<string, string>;
 }
 
 export interface TranscriptTurn {
@@ -59,6 +60,33 @@ function updateTranscriptDigest(hash: Hash, turn: TranscriptTurn): void {
 export function digestTranscriptTurns(turns: ReadonlyArray<TranscriptTurn>): string {
 	const hash = createHash("sha256");
 	for (const turn of turns) updateTranscriptDigest(hash, turn);
+	return hash.digest("hex");
+}
+
+function updateLegacyTranscriptDigest(hash: Hash, turn: TranscriptTurn): void {
+	const content = normalizeLf(turn.content).replace(/\s+/g, " ").trim();
+	if (content.length > 0) updateTranscriptDigest(hash, { role: turn.role, content });
+}
+
+export function digestLegacyTranscriptRecords(turns: ReadonlyArray<TranscriptTurn>): string {
+	const hash = createHash("sha256");
+	for (const turn of turns) updateLegacyTranscriptDigest(hash, turn);
+	return hash.digest("hex");
+}
+
+export function digestLegacyTranscriptText(transcript: string): string {
+	const hash = createHash("sha256");
+	for (const line of normalizeLf(transcript).split("\n")) {
+		const trimmed = line.trim();
+		if (trimmed.length === 0) continue;
+		const match = trimmed.match(/^(User|Human|Assistant)\s*:\s*(.*)$/i);
+		if (!match) {
+			updateLegacyTranscriptDigest(hash, { role: "unknown", content: trimmed });
+			continue;
+		}
+		const role = match[1]?.toLowerCase() === "assistant" ? "assistant" : "user";
+		updateLegacyTranscriptDigest(hash, { role, content: match[2] ?? "" });
+	}
 	return hash.digest("hex");
 }
 
@@ -470,8 +498,11 @@ export async function readCanonicalTranscriptSessionKeys(input: {
 	const canonicalKeys = new Set<string>();
 	const liveOnlyKeys = new Set<string>();
 	const completedHashes = new Map<string, Hash>();
+	const legacyHashes = new Map<string, Hash>();
 	const lastSeqByKey = new Map<string, number>();
-	if (!existsSync(path)) return { canonicalKeys, liveOnlyKeys, completedDigests: new Map() };
+	if (!existsSync(path)) {
+		return { canonicalKeys, liveOnlyKeys, completedDigests: new Map(), legacyCompletedDigests: new Map() };
+	}
 	const agentId = input.agentId?.trim() || null;
 	const stream = createReadStream(path, { encoding: "utf8" });
 	const lines = createInterface({
@@ -510,6 +541,9 @@ export async function readCanonicalTranscriptSessionKeys(input: {
 				const hash = completedHashes.get(key) ?? createHash("sha256");
 				updateTranscriptDigest(hash, record);
 				completedHashes.set(key, hash);
+				const legacyHash = legacyHashes.get(key) ?? createHash("sha256");
+				updateLegacyTranscriptDigest(legacyHash, record);
+				legacyHashes.set(key, legacyHash);
 				continue;
 			}
 			if (!canonicalKeys.has(key)) liveOnlyKeys.add(key);
@@ -522,6 +556,7 @@ export async function readCanonicalTranscriptSessionKeys(input: {
 		canonicalKeys,
 		liveOnlyKeys,
 		completedDigests: new Map([...completedHashes].map(([key, hash]) => [key, hash.digest("hex")])),
+		legacyCompletedDigests: new Map([...legacyHashes].map(([key, hash]) => [key, hash.digest("hex")])),
 	};
 }
 
