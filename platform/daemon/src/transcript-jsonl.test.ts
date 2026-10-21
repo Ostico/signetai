@@ -10,9 +10,13 @@ import {
 	appendCanonicalTranscriptSnapshotIfMissing,
 	appendCanonicalTranscriptTurns,
 	canonicalTranscriptPath,
+	digestLegacyTranscriptRecords,
+	digestLegacyTranscriptText,
 	readCanonicalTranscriptSessionKeys,
 	rewriteReplacingLiveOnlySessions,
 	sessionSeqCacheKey,
+	type TranscriptTurn,
+	transcriptTextToTurns,
 	writeCanonicalTranscriptSnapshot,
 } from "./transcript-jsonl";
 
@@ -894,84 +898,6 @@ describe("backfill replaces live-only sessions", () => {
 		expect(existsSync(join(root, "memory", ".canonical-transcript-backfill-v1.default"))).toBe(false);
 	});
 
-	function writeCollapsedLegacyRecords(
-		root: string,
-		sessionKey: string,
-		turns: ReadonlyArray<{ readonly role: string; readonly content: string }>,
-	): void {
-		const jsonlPath = canonicalTranscriptPath(root, "codex");
-		mkdirSync(dirname(jsonlPath), { recursive: true });
-		const lines = turns.map((turn, index) =>
-			JSON.stringify({
-				schema: "signet.transcript.v1",
-				id: `legacy-${index + 1}`,
-				captured_at: "2026-04-28T00:00:00.000Z",
-				agent_id: "default",
-				harness: "codex",
-				session_key: sessionKey,
-				session_id: sessionKey,
-				project: null,
-				seq: index + 1,
-				role: turn.role,
-				content: turn.content,
-				source_format: "markdown",
-				source_sha256: "legacy",
-			}),
-		);
-		writeFileSync(jsonlPath, `${lines.join("\n")}\n`, "utf8");
-	}
-
-	const collapsedLegacyTurns = [
-		{ role: "user", content: "legacy prompt" },
-		{ role: "unknown", content: "with a second line" },
-		{ role: "assistant", content: "reply with spaces" },
-	];
-	const originalLegacyTranscript = "User:  legacy   prompt\n  with  a second line\n\nAssistant: reply\twith  spaces  ";
-
-	test("settles the backfill marker when completed JSONL and Markdown differ only by collapsed whitespace", async () => {
-		const root = makeRoot("legacy-whitespace-markdown");
-		writeCollapsedLegacyRecords(root, "legacy-session", collapsedLegacyTurns);
-		writeTranscriptArtifact({
-			root,
-			fileName: "2026-04-28T00-00-00Z--legacysession0000--transcript.md",
-			sessionKey: "legacy-session",
-			transcript: originalLegacyTranscript,
-		});
-		await ensureCanonicalTranscriptHistory(root, "default");
-		expect(readJsonlLines(root)).toHaveLength(3);
-		expect(existsSync(join(root, "memory", ".canonical-transcript-backfill-v1.default"))).toBe(true);
-	});
-
-	test("settles the backfill marker when completed JSONL and a DB row differ only by collapsed whitespace", async () => {
-		const root = makeRoot("legacy-whitespace-db");
-		initTranscriptDb(root);
-		writeCollapsedLegacyRecords(root, "legacy-db-session", collapsedLegacyTurns);
-		getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) =>
-			db
-				.prepare(
-					`INSERT INTO session_transcripts (session_key, content, harness, project, agent_id, created_at, updated_at)
-					 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-				)
-				.run("legacy-db-session", originalLegacyTranscript, "codex", null, "default", "2026-04-28", "2026-04-28"),
-		);
-		await ensureCanonicalTranscriptHistory(root, "default");
-		expect(readJsonlLines(root)).toHaveLength(3);
-		expect(existsSync(join(root, "memory", ".canonical-transcript-backfill-v1.default"))).toBe(true);
-	});
-
-	test("still reports collapsed legacy records whose words differ from the Markdown", async () => {
-		const root = makeRoot("legacy-whitespace-divergence");
-		writeCollapsedLegacyRecords(root, "legacy-session", collapsedLegacyTurns);
-		writeTranscriptArtifact({
-			root,
-			fileName: "2026-04-28T00-00-00Z--legacysession0000--transcript.md",
-			sessionKey: "legacy-session",
-			transcript: originalLegacyTranscript.replace("spaces", "tabs"),
-		});
-		await ensureCanonicalTranscriptHistory(root, "default");
-		expect(existsSync(join(root, "memory", ".canonical-transcript-backfill-v1.default"))).toBe(false);
-	});
-
 	test("defers retries of an incomplete backfill with bounded backoff", async () => {
 		const root = makeRoot("deferred-backfill-retry");
 		await writeCanonicalTranscriptSnapshot({
@@ -1360,6 +1286,90 @@ describe("readCanonicalTranscriptSessionKeys classification", () => {
 
 		expect(canonicalKeys.size).toBe(0);
 		expect(liveOnlyKeys.size).toBe(0);
+	});
+
+	test("returns whitespace-collapsed digests for completed sessions only", async () => {
+		const root = makeRoot("classify-legacy-digests");
+
+		await appendCanonicalTranscriptTurns({
+			basePath: root,
+			agentId: "default",
+			harness: "codex",
+			sessionKey: "session-1",
+			sourceFormat: "live",
+			turns: [{ role: "user", content: "partial live turn" }],
+		});
+
+		await writeCanonicalTranscriptSnapshot({
+			basePath: root,
+			agentId: "default",
+			harness: "codex",
+			sessionKey: "session-2",
+			sourceFormat: "db",
+			transcript: "User:  canonical   prompt\nAssistant: canonical\treply",
+		});
+
+		const { canonicalKeys, legacyCompletedDigests } = await readCanonicalTranscriptSessionKeys({
+			basePath: root,
+			harness: "codex",
+			agentId: "default",
+		});
+
+		const [key] = [...canonicalKeys];
+		expect(legacyCompletedDigests.size).toBe(1);
+		expect(key && legacyCompletedDigests.get(key)).toBe(
+			digestLegacyTranscriptText("User: canonical prompt\nAssistant: canonical reply"),
+		);
+	});
+});
+
+describe("legacy transcript digests", () => {
+	const collapsedLegacyTurns: ReadonlyArray<TranscriptTurn> = [
+		{ role: "user", content: "legacy prompt" },
+		{ role: "unknown", content: "with a second line" },
+		{ role: "assistant", content: "reply with spaces" },
+	];
+	const originalLegacyTranscript = "User:  legacy   prompt\n  with  a second line\n\nAssistant: reply\twith  spaces  ";
+
+	test("reads a source the way the legacy writer split and collapsed it", () => {
+		expect(digestLegacyTranscriptText(originalLegacyTranscript)).toBe(
+			digestLegacyTranscriptRecords(collapsedLegacyTurns),
+		);
+	});
+
+	test("skips records left empty once whitespace is collapsed", () => {
+		expect(digestLegacyTranscriptRecords([...collapsedLegacyTurns, { role: "unknown", content: " \t " }])).toBe(
+			digestLegacyTranscriptRecords(collapsedLegacyTurns),
+		);
+	});
+
+	test("still tells apart records whose words differ", () => {
+		expect(digestLegacyTranscriptText(originalLegacyTranscript.replace("spaces", "tabs"))).not.toBe(
+			digestLegacyTranscriptRecords(collapsedLegacyTurns),
+		);
+	});
+
+	test("does not match a multi-line record against the legacy reading of its source", () => {
+		const faithfulTurns: ReadonlyArray<TranscriptTurn> = [
+			{ role: "user", content: "legacy   prompt\n  with  a second line" },
+			{ role: "assistant", content: "reply\twith  spaces" },
+		];
+		expect(digestLegacyTranscriptRecords(faithfulTurns)).not.toBe(digestLegacyTranscriptText(originalLegacyTranscript));
+	});
+
+	test("reads an indented role label the way the legacy writer did", () => {
+		expect(digestLegacyTranscriptText("  User: hello\n\tAssistant: hi")).toBe(
+			digestLegacyTranscriptRecords([
+				{ role: "user", content: "hello" },
+				{ role: "assistant", content: "hi" },
+			]),
+		);
+	});
+
+	test("does not match a current record of an indented role label against any legacy reading", () => {
+		const current = digestLegacyTranscriptRecords(transcriptTextToTurns("  User: hello"));
+		expect(current).not.toBe(digestLegacyTranscriptText("  User: hello"));
+		expect(current).not.toBe(digestLegacyTranscriptText("User: hello"));
 	});
 });
 
