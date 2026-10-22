@@ -126,6 +126,10 @@ function normalizeLf(text: string): string {
 	return text.replace(/\r\n?/g, "\n");
 }
 
+function collapseTurnWhitespace(text: string): string {
+	return text.replace(/\s+/g, " ").trim();
+}
+
 function cleanTurnContent(text: string): string {
 	return normalizeLf(text);
 }
@@ -600,9 +604,11 @@ export function writeCanonicalTranscriptSnapshot(
 				return true;
 			}
 			const incomingExtendsExisting =
-				existingSessionTurns.length < next.length &&
+				existingSessionTurns.length <= next.length &&
 				existingSessionTurns.every(
-					(record, index) => record.role === next[index]?.role && record.content === next[index]?.content,
+					(record, index) =>
+						record.role === next[index]?.role &&
+						collapseTurnWhitespace(record.content) === collapseTurnWhitespace(next[index]?.content ?? ""),
 				);
 			if (
 				(input.preserveExistingSession || (input.sourcePath && !existingSessionLiveOnly)) &&

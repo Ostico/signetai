@@ -580,6 +580,67 @@ describe("backfill OOM regression (#587)", () => {
 		expect(content).not.toContain('"content":"X"');
 	});
 
+	test("extends a completed session stored with collapsed legacy whitespace", async () => {
+		const root = makeRoot("extend-legacy-whitespace");
+		const jsonlPath = canonicalTranscriptPath(root, "claude-code");
+		const sourcePath = join(root, "session.jsonl");
+		await writeCanonicalTranscriptSnapshot({
+			basePath: root,
+			agentId: "default",
+			harness: "claude-code",
+			sessionKey: "session-1",
+			sourceFormat: "jsonl",
+			sourcePath,
+			transcript: 'User: run { "a": 1 } please\nAssistant: done',
+		});
+
+		const replaced = await writeCanonicalTranscriptSnapshot({
+			basePath: root,
+			agentId: "default",
+			harness: "claude-code",
+			sessionKey: "session-1",
+			sourceFormat: "jsonl",
+			sourcePath,
+			preserveExistingSession: true,
+			transcript: 'User: run {\n    "a": 1\n}  please\nAssistant: done\nUser: one more turn',
+		});
+
+		expect(replaced).toBe(true);
+		const records = readFileSync(jsonlPath, "utf8")
+			.trim()
+			.split("\n")
+			.map((line) => JSON.parse(line) as { content: string });
+		expect(records.map((record) => record.content)).toEqual(['run {\n    "a": 1\n}  please', "done", "one more turn"]);
+	});
+
+	test("still preserves a completed session when the replacement differs beyond whitespace", async () => {
+		const root = makeRoot("legacy-whitespace-real-divergence");
+		const sourcePath = join(root, "session.jsonl");
+		await writeCanonicalTranscriptSnapshot({
+			basePath: root,
+			agentId: "default",
+			harness: "claude-code",
+			sessionKey: "session-1",
+			sourceFormat: "jsonl",
+			sourcePath,
+			transcript: "User: run it please\nAssistant: done",
+		});
+
+		const replaced = await writeCanonicalTranscriptSnapshot({
+			basePath: root,
+			agentId: "default",
+			harness: "claude-code",
+			sessionKey: "session-1",
+			sourceFormat: "jsonl",
+			sourcePath,
+			preserveExistingSession: true,
+			transcript: "User: run  it  now\nAssistant: done\nUser: one more turn",
+		});
+
+		expect(replaced).toBe(false);
+		expect(readFileSync(canonicalTranscriptPath(root, "claude-code"), "utf8")).toContain('"content":"run it please"');
+	});
+
 	test("writeCanonicalTranscriptSnapshot handles large files without excessive memory (OOM guard)", async () => {
 		const root = makeRoot("snapshot-oom-guard");
 		const jsonlPath = canonicalTranscriptPath(root, "opencode");
