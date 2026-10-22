@@ -130,6 +130,32 @@ function collapseTurnWhitespace(text: string): string {
 	return text.replace(/\s+/g, " ").trim();
 }
 
+// Records written before d61d524b1 hold one turn per non-empty line: a
+// User/Human/Assistant prefix sets the role, any other line is unknown.
+function legacyTranscriptTurns(transcript: string): TranscriptTurn[] {
+	const turns: TranscriptTurn[] = [];
+	for (const line of normalizeLf(transcript).split("\n")) {
+		const trimmed = line.trim();
+		if (trimmed.length === 0) continue;
+		const match = trimmed.match(/^(User|Human|Assistant)\s*:\s*(.*)$/i);
+		const role = !match ? "unknown" : match[1]?.toLowerCase() === "assistant" ? "assistant" : "user";
+		const content = collapseTurnWhitespace(match ? (match[2] ?? "") : trimmed);
+		if (content.length > 0) turns.push({ role, content });
+	}
+	return turns;
+}
+
+function legacyTurnsPrefixTranscript(existing: ReadonlyArray<TranscriptTurn>, transcript: string): boolean {
+	const stored = existing
+		.map((turn) => ({ role: turn.role, content: collapseTurnWhitespace(turn.content) }))
+		.filter((turn) => turn.content.length > 0);
+	const legacy = legacyTranscriptTurns(transcript);
+	return (
+		stored.length <= legacy.length &&
+		stored.every((turn, index) => turn.role === legacy[index]?.role && turn.content === legacy[index]?.content)
+	);
+}
+
 function cleanTurnContent(text: string): string {
 	return normalizeLf(text);
 }
@@ -604,12 +630,13 @@ export function writeCanonicalTranscriptSnapshot(
 				return true;
 			}
 			const incomingExtendsExisting =
-				existingSessionTurns.length <= next.length &&
-				existingSessionTurns.every(
-					(record, index) =>
-						record.role === next[index]?.role &&
-						collapseTurnWhitespace(record.content) === collapseTurnWhitespace(next[index]?.content ?? ""),
-				);
+				(existingSessionTurns.length <= next.length &&
+					existingSessionTurns.every(
+						(record, index) =>
+							record.role === next[index]?.role &&
+							collapseTurnWhitespace(record.content) === collapseTurnWhitespace(next[index]?.content ?? ""),
+					)) ||
+				legacyTurnsPrefixTranscript(existingSessionTurns, input.transcript);
 			if (
 				(input.preserveExistingSession || (input.sourcePath && !existingSessionLiveOnly)) &&
 				!incomingExtendsExisting

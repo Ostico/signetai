@@ -641,6 +641,83 @@ describe("backfill OOM regression (#587)", () => {
 		expect(readFileSync(canonicalTranscriptPath(root, "claude-code"), "utf8")).toContain('"content":"run it please"');
 	});
 
+	function writeLegacyRecords(root: string, sourcePath: string, turns: ReadonlyArray<[string, string]>): string {
+		const jsonlPath = canonicalTranscriptPath(root, "claude-code");
+		mkdirSync(dirname(jsonlPath), { recursive: true });
+		const lines = turns.map(([role, content], index) =>
+			JSON.stringify({
+				schema: "signet.transcript.v1",
+				captured_at: "2026-09-01T00:00:00.000Z",
+				agent_id: "default",
+				harness: "claude-code",
+				session_key: "session-1",
+				session_id: "session-1",
+				project: null,
+				seq: index + 1,
+				role,
+				content,
+				source_format: "jsonl",
+				source_path: sourcePath,
+			}),
+		);
+		writeFileSync(jsonlPath, `${lines.join("\n")}\n`);
+		return jsonlPath;
+	}
+
+	test("extends a completed session stored with legacy one-line turns", async () => {
+		const root = makeRoot("extend-legacy-line-turns");
+		const sourcePath = join(root, "session.jsonl");
+		const jsonlPath = writeLegacyRecords(root, sourcePath, [
+			["user", "run the checks"],
+			["unknown", "System: hook ok"],
+			["unknown", "then report"],
+			["assistant", "done"],
+		]);
+
+		const replaced = await writeCanonicalTranscriptSnapshot({
+			basePath: root,
+			agentId: "default",
+			harness: "claude-code",
+			sessionKey: "session-1",
+			sourceFormat: "jsonl",
+			sourcePath,
+			preserveExistingSession: true,
+			transcript: "User: run  the checks\nSystem: hook ok\n\nthen report\nAssistant: done\nUser: one more turn",
+		});
+
+		expect(replaced).toBe(true);
+		const records = readFileSync(jsonlPath, "utf8")
+			.trim()
+			.split("\n")
+			.map((line) => JSON.parse(line) as { role: string; content: string });
+		expect(records.map((record) => record.role)).toEqual(["user", "assistant", "user"]);
+		expect(records[0]?.content).toBe("run  the checks\nSystem: hook ok\n\nthen report");
+	});
+
+	test("still preserves legacy one-line turns when the replacement differs in content", async () => {
+		const root = makeRoot("legacy-line-turns-real-divergence");
+		const sourcePath = join(root, "session.jsonl");
+		const jsonlPath = writeLegacyRecords(root, sourcePath, [
+			["user", "run the checks"],
+			["unknown", "then report"],
+			["assistant", "done"],
+		]);
+
+		const replaced = await writeCanonicalTranscriptSnapshot({
+			basePath: root,
+			agentId: "default",
+			harness: "claude-code",
+			sessionKey: "session-1",
+			sourceFormat: "jsonl",
+			sourcePath,
+			preserveExistingSession: true,
+			transcript: "User: run the checks\nthen skip the report\nAssistant: done\nUser: one more turn",
+		});
+
+		expect(replaced).toBe(false);
+		expect(readFileSync(jsonlPath, "utf8")).toContain('"content":"then report"');
+	});
+
 	test("writeCanonicalTranscriptSnapshot handles large files without excessive memory (OOM guard)", async () => {
 		const root = makeRoot("snapshot-oom-guard");
 		const jsonlPath = canonicalTranscriptPath(root, "opencode");
