@@ -132,7 +132,7 @@ describe("transcript capture worker", () => {
 	it("revalidates a completed source when bytes change without changing stat metadata", async () => {
 		const sourcePath = join(dir, "same-stat.jsonl");
 		const replacement = "User: first\nUser: x\n";
-		const initial = "User: first\nUser: y\n";
+		const initial = `User: first${" ".repeat(replacement.length - "User: first".length - 1)}\n`;
 		expect(Buffer.byteLength(initial)).toBe(Buffer.byteLength(replacement));
 		writeFileSync(sourcePath, initial, "utf8");
 		const initialStat = statSync(sourcePath);

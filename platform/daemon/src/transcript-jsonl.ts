@@ -43,6 +43,7 @@ export interface TranscriptSessionKeyClassification {
 	readonly canonicalKeys: Set<string>;
 	readonly liveOnlyKeys: Set<string>;
 	readonly completedDigests: Map<string, string>;
+	readonly legacyShapedKeys: Set<string>;
 }
 
 export interface TranscriptTurn {
@@ -130,7 +131,7 @@ function collapseTurnWhitespace(text: string): string {
 	return text.replace(/\s+/g, " ").trim();
 }
 
-function legacyTranscriptTurns(transcript: string): TranscriptTurn[] {
+export function legacyTranscriptTurns(transcript: string): TranscriptTurn[] {
 	const turns: TranscriptTurn[] = [];
 	for (const line of normalizeLf(transcript).split("\n")) {
 		const trimmed = line.trim();
@@ -143,14 +144,21 @@ function legacyTranscriptTurns(transcript: string): TranscriptTurn[] {
 	return turns;
 }
 
-function legacyTurnsPrefixTranscript(existing: ReadonlyArray<TranscriptTurn>, transcript: string): boolean {
-	const stored = existing
-		.map((turn) => ({ role: turn.role, content: collapseTurnWhitespace(turn.content) }))
-		.filter((turn) => turn.content.length > 0);
+function isLegacyShapedContent(content: string): boolean {
+	return content.length > 0 && content === collapseTurnWhitespace(content);
+}
+
+export function isLegacyShapedSession(turns: ReadonlyArray<TranscriptTurn>): boolean {
+	const stored = turns.filter((turn) => cleanTurnContent(turn.content).length > 0);
+	return stored.length > 0 && stored.every((turn) => isLegacyShapedContent(cleanTurnContent(turn.content)));
+}
+
+function legacySessionPrefixesTranscript(existing: ReadonlyArray<TranscriptTurn>, transcript: string): boolean {
+	if (!isLegacyShapedSession(existing)) return false;
 	const legacy = legacyTranscriptTurns(transcript);
 	return (
-		stored.length <= legacy.length &&
-		stored.every((turn, index) => turn.role === legacy[index]?.role && turn.content === legacy[index]?.content)
+		existing.length <= legacy.length &&
+		existing.every((turn, index) => turn.role === legacy[index]?.role && turn.content === legacy[index]?.content)
 	);
 }
 
@@ -498,8 +506,11 @@ export async function readCanonicalTranscriptSessionKeys(input: {
 	const canonicalKeys = new Set<string>();
 	const liveOnlyKeys = new Set<string>();
 	const completedHashes = new Map<string, Hash>();
+	const reshapedKeys = new Set<string>();
 	const lastSeqByKey = new Map<string, number>();
-	if (!existsSync(path)) return { canonicalKeys, liveOnlyKeys, completedDigests: new Map() };
+	if (!existsSync(path)) {
+		return { canonicalKeys, liveOnlyKeys, completedDigests: new Map(), legacyShapedKeys: new Set() };
+	}
 	const agentId = input.agentId?.trim() || null;
 	const stream = createReadStream(path, { encoding: "utf8" });
 	const lines = createInterface({
@@ -538,6 +549,7 @@ export async function readCanonicalTranscriptSessionKeys(input: {
 				const hash = completedHashes.get(key) ?? createHash("sha256");
 				updateTranscriptDigest(hash, record);
 				completedHashes.set(key, hash);
+				if (!isLegacyShapedContent(record.content)) reshapedKeys.add(key);
 				continue;
 			}
 			if (!canonicalKeys.has(key)) liveOnlyKeys.add(key);
@@ -550,11 +562,15 @@ export async function readCanonicalTranscriptSessionKeys(input: {
 		canonicalKeys,
 		liveOnlyKeys,
 		completedDigests: new Map([...completedHashes].map(([key, hash]) => [key, hash.digest("hex")])),
+		legacyShapedKeys: new Set([...completedHashes.keys()].filter((key) => !reshapedKeys.has(key))),
 	};
 }
 
 export function writeCanonicalTranscriptSnapshot(
-	input: TranscriptIdentity & { readonly transcript: string },
+	input: TranscriptIdentity & {
+		readonly transcript: string;
+		readonly onLegacySessionReplaced?: (legacyTurns: number, sourceTurns: number) => void;
+	},
 ): Promise<boolean> {
 	const turns = transcriptTextToTurns(input.transcript);
 	if (turns.length === 0) return Promise.resolve(false);
@@ -628,22 +644,22 @@ export function writeCanonicalTranscriptSnapshot(
 				return true;
 			}
 			const incomingExtendsExisting =
-				(existingSessionTurns.length <= next.length &&
-					existingSessionTurns.every(
-						(record, index) =>
-							record.role === next[index]?.role &&
-							collapseTurnWhitespace(record.content) === collapseTurnWhitespace(next[index]?.content ?? ""),
-					)) ||
-				legacyTurnsPrefixTranscript(existingSessionTurns, input.transcript);
-			if (
-				(input.preserveExistingSession || (input.sourcePath && !existingSessionLiveOnly)) &&
-				!incomingExtendsExisting
-			) {
+				existingSessionTurns.length < next.length &&
+				existingSessionTurns.every(
+					(record, index) => record.role === next[index]?.role && record.content === next[index]?.content,
+				);
+			const appendOnly = input.preserveExistingSession || (input.sourcePath && !existingSessionLiveOnly);
+			const incomingReplacesLegacy =
+				appendOnly &&
+				!incomingExtendsExisting &&
+				legacySessionPrefixesTranscript(existingSessionTurns, input.transcript);
+			if (appendOnly && !incomingExtendsExisting && !incomingReplacesLegacy) {
 				closeSync(fd);
 				fd = null;
 				rmSync(tmpPath, { force: true });
 				return false;
 			}
+			if (incomingReplacesLegacy) input.onLegacySessionReplaced?.(existingSessionTurns.length, next.length);
 			for (const r of next) {
 				writeSync(fd, `${JSON.stringify(r)}\n`);
 			}
@@ -661,7 +677,6 @@ export function writeCanonicalTranscriptSnapshot(
 		}
 	});
 }
-
 export function appendCanonicalTranscriptTurns(
 	input: TranscriptIdentity & { readonly turns: readonly TranscriptTurn[] },
 ): Promise<string | null> {

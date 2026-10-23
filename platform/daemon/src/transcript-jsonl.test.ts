@@ -10,6 +10,8 @@ import {
 	appendCanonicalTranscriptSnapshotIfMissing,
 	appendCanonicalTranscriptTurns,
 	canonicalTranscriptPath,
+	isLegacyShapedSession,
+	legacyTranscriptTurns,
 	readCanonicalTranscriptSessionKeys,
 	rewriteReplacingLiveOnlySessions,
 	sessionSeqCacheKey,
@@ -580,9 +582,8 @@ describe("backfill OOM regression (#587)", () => {
 		expect(content).not.toContain('"content":"X"');
 	});
 
-	test("extends a completed session stored with collapsed legacy whitespace", async () => {
-		const root = makeRoot("extend-legacy-whitespace");
-		const jsonlPath = canonicalTranscriptPath(root, "claude-code");
+	test("refuses a whitespace-poorer source for a completed session in the current format", async () => {
+		const root = makeRoot("current-format-whitespace");
 		const sourcePath = join(root, "session.jsonl");
 		await writeCanonicalTranscriptSnapshot({
 			basePath: root,
@@ -591,7 +592,7 @@ describe("backfill OOM regression (#587)", () => {
 			sessionKey: "session-1",
 			sourceFormat: "jsonl",
 			sourcePath,
-			transcript: 'User: run { "a": 1 } please\nAssistant: done',
+			transcript: 'User: run {\n    "a": 1\n}  please\nAssistant: done',
 		});
 
 		const replaced = await writeCanonicalTranscriptSnapshot({
@@ -602,15 +603,45 @@ describe("backfill OOM regression (#587)", () => {
 			sourceFormat: "jsonl",
 			sourcePath,
 			preserveExistingSession: true,
-			transcript: 'User: run {\n    "a": 1\n}  please\nAssistant: done\nUser: one more turn',
+			transcript: 'User: run { "a": 1 } please\nAssistant: done\nUser: one more turn',
+		});
+
+		expect(replaced).toBe(false);
+		const records = readFileSync(canonicalTranscriptPath(root, "claude-code"), "utf8")
+			.trim()
+			.split("\n")
+			.map((line) => JSON.parse(line) as { content: string });
+		expect(records.map((record) => record.content)).toEqual(['run {\n    "a": 1\n}  please', "done"]);
+	});
+
+	test("extends a completed session stored with legacy collapsed whitespace", async () => {
+		const root = makeRoot("extend-legacy-whitespace");
+		const sourcePath = join(root, "session.jsonl");
+		const jsonlPath = writeLegacyRecords(root, sourcePath, [
+			["user", 'run { "a": 1 } please'],
+			["assistant", "done"],
+		]);
+		const replacements: Array<[number, number]> = [];
+
+		const replaced = await writeCanonicalTranscriptSnapshot({
+			basePath: root,
+			agentId: "default",
+			harness: "claude-code",
+			sessionKey: "session-1",
+			sourceFormat: "jsonl",
+			sourcePath,
+			preserveExistingSession: true,
+			transcript: 'User:  run  {  "a": 1 }\tplease  \nAssistant: done\nUser: one more turn',
+			onLegacySessionReplaced: (legacyTurns, sourceTurns) => replacements.push([legacyTurns, sourceTurns]),
 		});
 
 		expect(replaced).toBe(true);
+		expect(replacements).toEqual([[2, 3]]);
 		const records = readFileSync(jsonlPath, "utf8")
 			.trim()
 			.split("\n")
 			.map((line) => JSON.parse(line) as { content: string });
-		expect(records.map((record) => record.content)).toEqual(['run {\n    "a": 1\n}  please', "done", "one more turn"]);
+		expect(records.map((record) => record.content)).toEqual([' run  {  "a": 1 }\tplease  ', "done", "one more turn"]);
 	});
 
 	test("still preserves a completed session when the replacement differs beyond whitespace", async () => {
@@ -1420,6 +1451,70 @@ describe("readCanonicalTranscriptSessionKeys classification", () => {
 
 		expect(canonicalKeys.size).toBe(0);
 		expect(liveOnlyKeys.size).toBe(0);
+	});
+
+	test("reports completed sessions whose records all have the legacy shape", async () => {
+		const root = makeRoot("classify-legacy-shape");
+		await appendCanonicalTranscriptTurns({
+			basePath: root,
+			agentId: "default",
+			harness: "codex",
+			sessionKey: "live-session",
+			sourceFormat: "live",
+			turns: [{ role: "user", content: "partial live turn" }],
+		});
+		for (const [sessionKey, transcript] of [
+			["shaped-session", "User: canonical prompt\nAssistant: canonical reply"],
+			["rich-session", "User:  canonical   prompt\nAssistant: canonical\treply"],
+			["multiline-session", "User: canonical prompt\nsecond line\nAssistant: canonical reply"],
+		] as const) {
+			await writeCanonicalTranscriptSnapshot({
+				basePath: root,
+				agentId: "default",
+				harness: "codex",
+				sessionKey,
+				sourceFormat: "db",
+				transcript,
+			});
+		}
+
+		const { canonicalKeys, legacyShapedKeys } = await readCanonicalTranscriptSessionKeys({
+			basePath: root,
+			harness: "codex",
+			agentId: "default",
+		});
+
+		expect(canonicalKeys.size).toBe(3);
+		expect([...legacyShapedKeys]).toEqual([
+			sessionSeqCacheKey({ agentId: "default", harness: "codex", sessionKey: "shaped-session", sourceFormat: "db" }),
+		]);
+	});
+});
+
+describe("legacy transcript reader", () => {
+	test("reads a source the way the legacy writer split and collapsed it", () => {
+		expect(
+			legacyTranscriptTurns("User:  legacy   prompt\n  with  a second line\n\nAssistant: reply\twith  spaces  "),
+		).toEqual([
+			{ role: "user", content: "legacy prompt" },
+			{ role: "unknown", content: "with a second line" },
+			{ role: "assistant", content: "reply with spaces" },
+		]);
+	});
+
+	test("reads an indented role label the way the legacy writer did", () => {
+		expect(legacyTranscriptTurns("  User: hello\n\tAssistant: hi")).toEqual([
+			{ role: "user", content: "hello" },
+			{ role: "assistant", content: "hi" },
+		]);
+	});
+
+	test("recognizes only sessions whose every turn is collapsed and single-line", () => {
+		expect(isLegacyShapedSession([{ role: "user", content: "legacy prompt" }])).toBe(true);
+		expect(isLegacyShapedSession([{ role: "user", content: "legacy  prompt" }])).toBe(false);
+		expect(isLegacyShapedSession([{ role: "user", content: "legacy\nprompt" }])).toBe(false);
+		expect(isLegacyShapedSession([{ role: "user", content: " legacy prompt" }])).toBe(false);
+		expect(isLegacyShapedSession([])).toBe(false);
 	});
 });
 
