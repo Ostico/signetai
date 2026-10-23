@@ -43,7 +43,7 @@ export interface TranscriptSessionKeyClassification {
 	readonly canonicalKeys: Set<string>;
 	readonly liveOnlyKeys: Set<string>;
 	readonly completedDigests: Map<string, string>;
-	readonly legacyShapedKeys: Set<string>;
+	readonly legacyLayoutKeys: Set<string>;
 }
 
 export interface TranscriptTurn {
@@ -144,17 +144,26 @@ export function legacyTranscriptTurns(transcript: string): TranscriptTurn[] {
 	return turns;
 }
 
-function isLegacyShapedContent(content: string): boolean {
-	return content.length > 0 && content === collapseTurnWhitespace(content);
+type LegacyLayout = { readonly roleSeen: boolean; readonly splitLine: boolean } | null;
+
+function nextLegacyLayout(layout: LegacyLayout | undefined, turn: TranscriptTurn): LegacyLayout {
+	if (layout === null) return null;
+	const previous = layout ?? { roleSeen: false, splitLine: false };
+	const content = cleanTurnContent(turn.content);
+	if (content.length === 0) return previous;
+	if (content !== collapseTurnWhitespace(content)) return null;
+	if (turn.role !== "unknown") return { roleSeen: true, splitLine: previous.splitLine };
+	return { roleSeen: previous.roleSeen, splitLine: previous.splitLine || previous.roleSeen };
 }
 
-export function isLegacyShapedSession(turns: ReadonlyArray<TranscriptTurn>): boolean {
-	const stored = turns.filter((turn) => cleanTurnContent(turn.content).length > 0);
-	return stored.length > 0 && stored.every((turn) => isLegacyShapedContent(cleanTurnContent(turn.content)));
+export function isLegacyLayoutSession(turns: ReadonlyArray<TranscriptTurn>): boolean {
+	let layout: LegacyLayout | undefined;
+	for (const turn of turns) layout = nextLegacyLayout(layout, turn);
+	return layout?.splitLine === true;
 }
 
 function legacySessionPrefixesTranscript(existing: ReadonlyArray<TranscriptTurn>, transcript: string): boolean {
-	if (!isLegacyShapedSession(existing)) return false;
+	if (!isLegacyLayoutSession(existing)) return false;
 	const legacy = legacyTranscriptTurns(transcript);
 	return (
 		existing.length <= legacy.length &&
@@ -506,10 +515,10 @@ export async function readCanonicalTranscriptSessionKeys(input: {
 	const canonicalKeys = new Set<string>();
 	const liveOnlyKeys = new Set<string>();
 	const completedHashes = new Map<string, Hash>();
-	const reshapedKeys = new Set<string>();
+	const legacyLayouts = new Map<string, LegacyLayout>();
 	const lastSeqByKey = new Map<string, number>();
 	if (!existsSync(path)) {
-		return { canonicalKeys, liveOnlyKeys, completedDigests: new Map(), legacyShapedKeys: new Set() };
+		return { canonicalKeys, liveOnlyKeys, completedDigests: new Map(), legacyLayoutKeys: new Set() };
 	}
 	const agentId = input.agentId?.trim() || null;
 	const stream = createReadStream(path, { encoding: "utf8" });
@@ -549,7 +558,7 @@ export async function readCanonicalTranscriptSessionKeys(input: {
 				const hash = completedHashes.get(key) ?? createHash("sha256");
 				updateTranscriptDigest(hash, record);
 				completedHashes.set(key, hash);
-				if (!isLegacyShapedContent(record.content)) reshapedKeys.add(key);
+				legacyLayouts.set(key, nextLegacyLayout(legacyLayouts.get(key), record));
 				continue;
 			}
 			if (!canonicalKeys.has(key)) liveOnlyKeys.add(key);
@@ -562,7 +571,7 @@ export async function readCanonicalTranscriptSessionKeys(input: {
 		canonicalKeys,
 		liveOnlyKeys,
 		completedDigests: new Map([...completedHashes].map(([key, hash]) => [key, hash.digest("hex")])),
-		legacyShapedKeys: new Set([...completedHashes.keys()].filter((key) => !reshapedKeys.has(key))),
+		legacyLayoutKeys: new Set([...legacyLayouts].filter(([, layout]) => layout?.splitLine).map(([key]) => key)),
 	};
 }
 

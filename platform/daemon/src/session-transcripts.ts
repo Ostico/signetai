@@ -12,7 +12,6 @@ import {
 	appendCanonicalTranscriptSnapshotIfMissing,
 	canonicalTranscriptPath,
 	digestTranscriptTurns,
-	isLegacyShapedSession,
 	legacyTranscriptTurns,
 	readCanonicalTranscriptSessionKeys,
 	rewriteReplacingLiveOnlySessions,
@@ -123,8 +122,7 @@ function markBackfillCanonical(
 	classification.canonicalKeys.add(key);
 	const turns = transcriptTextToTurns(transcript);
 	classification.completedDigests.set(key, digestTranscriptTurns(turns));
-	if (isLegacyShapedSession(turns)) classification.legacyShapedKeys.add(key);
-	else classification.legacyShapedKeys.delete(key);
+	classification.legacyLayoutKeys.delete(key);
 }
 
 function diagnoseCompletedMismatch(
@@ -136,7 +134,7 @@ function diagnoseCompletedMismatch(
 	if (!completedDigest || completedDigest === digestTranscriptTurns(transcriptTextToTurns(input.transcript)))
 		return false;
 	if (
-		classification.legacyShapedKeys.has(key) &&
+		classification.legacyLayoutKeys.has(key) &&
 		completedDigest === digestTranscriptTurns(legacyTranscriptTurns(input.transcript))
 	) {
 		logger.info("transcripts", "Legacy completed transcript representation matches its source", {
@@ -161,7 +159,7 @@ function tableExists(name: string): boolean {
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 		return getDbAccessor().withReadDb(
 			(db: import("./db-accessor").ReadDb) => tableExistsInDatabase(db, name),
-			"session-transcripts.ts:162",
+			"session-transcripts.ts:160",
 		);
 	} catch {
 		return false;
@@ -174,7 +172,7 @@ function sessionTranscriptsHasColumn(column: string): boolean {
 		return getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
 			const cols = db.prepare("PRAGMA table_info(session_transcripts)").all() as ReadonlyArray<Record<string, unknown>>;
 			return cols.some((col) => col.name === column);
-		}, "session-transcripts.ts:174");
+		}, "session-transcripts.ts:172");
 	} catch {
 		return false;
 	}
@@ -327,7 +325,7 @@ async function backfillDatabaseTranscripts(
 						ORDER BY agent_id, harness, session_key, rowid
 						LIMIT ? OFFSET ?`;
 				return db.prepare(sql).all(PAGE_SIZE, offset) as unknown as StoredTranscriptBackfillRow[];
-			}, "session-transcripts.ts:315");
+			}, "session-transcripts.ts:313");
 			if (rows.length === 0) break;
 			for (const row of rows) {
 				const rowAgentId = row.agent_id?.trim() || "default";
@@ -496,7 +494,7 @@ function hasUpdatedAt(): boolean {
 		return getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
 			const cols = db.prepare("PRAGMA table_info(session_transcripts)").all() as ReadonlyArray<Record<string, unknown>>;
 			return cols.some((col) => col.name === "updated_at");
-		}, "session-transcripts.ts:496");
+		}, "session-transcripts.ts:494");
 	} catch {
 		return false;
 	}
@@ -606,7 +604,7 @@ export function upsertSessionTranscript(
 					 ON CONFLICT(agent_id, session_key) DO UPDATE SET ${updates.join(", ")}`,
 			).run(...values);
 			return true;
-		}, "session-transcripts.ts:550");
+		}, "session-transcripts.ts:548");
 	} catch (error) {
 		logger.warn("transcripts", "Transcript upsert failed", {
 			error: error instanceof Error ? error.message : String(error),
@@ -689,7 +687,7 @@ export async function upsertSessionTranscriptAsync(
 				).run(...values);
 				return true;
 			},
-			{ siteToken: "session-transcripts.ts:632", operation: "transcripts.upsert", signal: options?.signal },
+			{ siteToken: "session-transcripts.ts:630", operation: "transcripts.upsert", signal: options?.signal },
 		);
 	} catch (error) {
 		if (options?.signal?.aborted) throw error;
@@ -735,7 +733,7 @@ export function markSessionTranscriptCompleted(
 		return (accessor ?? getDbAccessor()).withWriteTx((db: import("./db-accessor").WriteDb) => {
 			if (!tableExistsInDatabase(db, "session_transcripts")) return false;
 			return markSessionTranscriptCompletedInTx(db, sessionKey, agentId, completedAt);
-		}, "session-transcripts.ts:735");
+		}, "session-transcripts.ts:733");
 	} catch (error) {
 		logger.warn("transcripts", "Transcript completion marker failed", {
 			error: error instanceof Error ? error.message : String(error),
@@ -798,7 +796,7 @@ export function getStoredSessionTranscriptInfo(sessionKey: string, agentId: stri
 				completedAt: row.completed_at ?? null,
 				contentHash: row.content_hash ?? null,
 			};
-		}, "session-transcripts.ts:767");
+		}, "session-transcripts.ts:765");
 	} catch {
 		return undefined;
 	}
@@ -866,7 +864,7 @@ export async function getStoredSessionTranscriptInfoAsync(
 				if (!tableExistsInDatabase(db, "session_transcripts")) return undefined;
 				return readStoredSessionTranscriptInfo(db, sessionKey, agentId);
 			},
-			{ siteToken: "session-transcripts.ts:864", operation: "transcripts.lookup", signal },
+			{ siteToken: "session-transcripts.ts:862", operation: "transcripts.lookup", signal },
 		);
 	} catch (error) {
 		if (signal?.aborted) throw error;
@@ -890,7 +888,7 @@ export function getSessionTranscriptContent(sessionKey: string, agentId: string)
 				)
 				.get(agentId, ...aliases, sessionKey) as { content: string } | undefined;
 			return row?.content;
-		}, "session-transcripts.ts:883");
+		}, "session-transcripts.ts:881");
 	} catch {
 		return undefined;
 	}
@@ -938,7 +936,7 @@ export function findStaleLiveSessions(staleOlderThanMs: number, limit = 50): Sta
 				content: row.content,
 				lastActivityAt: row.last_activity,
 			}));
-		}, "session-transcripts.ts:914");
+		}, "session-transcripts.ts:912");
 	} catch {
 		return [];
 	}
@@ -986,7 +984,7 @@ export function searchTranscriptFallback(params: {
 					].join("\n"),
 				)
 				.all(...args) as unknown as TranscriptRow[];
-		}, "session-transcripts.ts:969");
+		}, "session-transcripts.ts:967");
 		if (exactRows.length > 0) {
 			return exactRows
 				.map((row) => ({
@@ -1029,7 +1027,7 @@ export function searchTranscriptFallback(params: {
 							parts.push(`ORDER BY rank ASC, ${seenExpr} DESC LIMIT ?`);
 							args.push(limit * 2);
 							return db.prepare(parts.join("\n")).all(...args) as unknown as TranscriptRow[];
-						}, "session-transcripts.ts:1014");
+						}, "session-transcripts.ts:1012");
 
 					const hits = rows
 						.map((row) => ({
@@ -1099,7 +1097,7 @@ export function searchTranscriptFallback(params: {
 				parts.push(`ORDER BY rank DESC, ${seenExpr} DESC LIMIT ?`);
 				args.push(limit);
 				return db.prepare(parts.join("\n")).all(...args) as unknown as TranscriptRow[];
-			}, "session-transcripts.ts:1078");
+			}, "session-transcripts.ts:1076");
 
 		return rows
 			.map((row) => ({
