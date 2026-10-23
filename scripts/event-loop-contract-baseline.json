@@ -1655,14 +1655,14 @@
     },
     {
       "path": "memory-config.ts",
-      "line": 359,
+      "line": 358,
       "api": "existsSync",
       "source": ".find((path) => existsSync(path));",
       "category": "hot-path"
     },
     {
       "path": "memory-config.ts",
-      "line": 361,
+      "line": 360,
       "api": "readFileSync",
       "source": "const yaml = path ? parseRuntimeYaml(readFileSync(path, \"utf8\")) : {};",
       "category": "hot-path"
@@ -1930,7 +1930,7 @@
     },
     {
       "path": "memory-search.ts",
-      "line": 2405,
+      "line": 2406,
       "api": "withReadDbAsync",
       "source": "const contentRows = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path",
@@ -1938,7 +1938,7 @@
     },
     {
       "path": "memory-search.ts",
-      "line": 2478,
+      "line": 2479,
       "api": "withReadDbAsync",
       "source": "const contentRows = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path",
@@ -1946,7 +1946,7 @@
     },
     {
       "path": "memory-search.ts",
-      "line": 2519,
+      "line": 2520,
       "api": "withReadDbAsync",
       "source": "const contentRows = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path",
@@ -1954,7 +1954,7 @@
     },
     {
       "path": "memory-search.ts",
-      "line": 2596,
+      "line": 2597,
       "api": "withReadDbAsync",
       "source": "const dampenRows = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path",
@@ -1962,7 +1962,7 @@
     },
     {
       "path": "memory-search.ts",
-      "line": 2910,
+      "line": 2911,
       "api": "withReadDbAsync",
       "source": "await getDbAccessor().withReadDbAsync(",
       "category": "hot-path",
