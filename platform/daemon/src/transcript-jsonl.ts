@@ -130,8 +130,6 @@ function collapseTurnWhitespace(text: string): string {
 	return text.replace(/\s+/g, " ").trim();
 }
 
-// Records written before d61d524b1 hold one turn per non-empty line: a
-// User/Human/Assistant prefix sets the role, any other line is unknown.
 function legacyTranscriptTurns(transcript: string): TranscriptTurn[] {
 	const turns: TranscriptTurn[] = [];
 	for (const line of normalizeLf(transcript).split("\n")) {
