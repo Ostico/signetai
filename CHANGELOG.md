@@ -6,6 +6,17 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-10-26
+- Features: set the Dreaming pass timeout for slower local models; cap local answering and judging reasoning with a thinking budget; override the Dreaming model context window; cap thinking on local OpenAI-compatible targets; send enable_thinking with the local reasoning effort; set the Dreaming per-turn output budget for local reasoning models; run answering and judging on local OpenAI-compatible models; raise LLM and Dreaming concurrency ceilings to 256.
+- Bug fixes: discover the window only for agents; bound archive retries and clean temp files; report activeAgentId only for that agent; harden the RunPod kit from review; cap waits at the retry deadline; scope dream status to the agent; repair a torn tail on append; read the served context window; cap evidence delivered per pass; bound scheduled content sweeps and size passes by maxPassTokens; size passes so they finish and commit instead of livelocking; treat a DB owner deadline on trigger as retryable; count special-token literals in user text instead of throwing; return a retryable 503 when a trigger hits DB owner pressure; resend dropped requests on a fresh connection and name the failed path; keep every question when resuming an unrestricted run; page session-claim restore so a busy daemon can restart; keep honoring Retry-After while the capture backlog drains; treat a full transcript-capture backlog as retryable write pressure; resend requests the daemon dropped on a pooled connection; take local targets' context window from the server; create each haystack agent once and retry Signet write pressure; surface write pressure as retryable 503s instead of 500s and dropped captures; report running passes in /api/dream/status; restore the loopback endpoint check for local Dreaming models.
+- Performance: scope the per-agent canonical backfill query to that agent; append a new session's snapshot instead of rewriting the canonical JSONL.
+- Docs: record the Qwen3.8-27B vLLM recipe for one Blackwell GPU.
+
+### 2026-10-25
+- Bug fixes: return primary candidates in fused rank order; score the best fused recall hit 1; reserve candidate slots for the best vector hits; rank keyword and vector hits by position in hybrid recall; keep rehearsal boost finite for unparseable access times; measure hint coverage against the sanitized FTS query; count traversal cosine as direct evidence at final rank; measure hint coverage with a unicode tokenizer; cap hint-only rows by evidence, not source label; bound hint and rehearsal contributions to recall scores; publish head over unrecorded revisions.
+- Refactoring: retire search.alpha.
+- Docs: state what the hint-only cap guarantees.
+
 ### 2026-10-24
 - Bug fixes: keep temporal window fill when vector reads fail; decode owner hex in linear time and bound vector pages; page transcript evidence by bytes; keep paged recall reads in scope and bounded; decode and page traversal vectors; page transcript evidence reads; retry stapler validation on lost Apple connection; dedupe escaped PATH profile entries; escape shell metachars in PATH line; print PATH commands after piped install.
 
@@ -24,17 +35,110 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Performance: bound import attention drain check.
 - Docs: name migration 169 as latest.
 
-### 2026-10-08
-- Bug fixes: stop orphaning nightly releases; read failure and pass times as UTC; keep supported carried entries; revalidate carried head entries; bind head fence and carry entries; stop content passes staling their head; count every purged mention; bind memory-head commits to the running pass; keep aliases and assertions on merge; reconcile contradictions on skill uninstall; stop reconciling contradictions on read; bound native embedding input; defer incomplete transcript backfill; stop blocking input on prompt-submit; keep transcript seq monotonic per key; keep identity in portable import; record ontology claim actor; cascade and audit agent removal; stop retention from deleting entities; check pid hints and relative paths; scope daemon stop to its workspace; keep opt-in for existing workspaces; list memory setup under Needs attention; show the pipeline on when unset; wait for a provider instead of pausing.
-- Docs: address review on docs template; add screenshots for docs template PR; add page template and rewrite core pages; refresh for 1.0 and post-1.0 direction; note native updater cap in 1.0 post.
-
-### 2026-10-07
-- Features: stem the memory keyword index; return bounded transcript evidence; rerank with a local cross-encoder fused with retrieval order; record each pass's peak context; tell each pass the current local date and time; list pending attention in the pass prompt and fold idle tools; let any pass merge and rename aspects at the aspect cap; carry pass history as a compacted view instead of runbook reads; give claims structured event time and validity; add a seeded proportional LongMemEval question sampler; support subscription providers for Dreaming; edit Dreaming concurrency and input budget in Advanced settings; run read-only lookups through Pi codemode behind a flag; pick the agent shown in the memory graph; run incremental passes for disjoint agent groups concurrently; add Muse Code connector.
-- Bug fixes: report the full queue when the admission wait outlasts the deadline; stop source sync from writing claims and deleting Dreaming's; resolve memory claim citations; declare root YAML dependency; flag Dreaming claims for review when a source is edited; isolate pipeline config fixture; synchronize benchmark dependencies; fill a date window's empty slots with its other memories; require a claim time when a claim names a date; run the Supermemory provider against a self-hosted server; place transcript excerpts by cross-encoder relevance; keep same-attribute updates in one claim slot, ordered by capture; drain new-memory embeddings back to back; find relative-time claims filed with approximate dates; let the transcript recovery child exit after its scan; embed sqlite-vec in the compiled binary; make the cross-encoder work in the compiled binary; say what each named thing is when filing a claim; give attention-only scopes their own pass or let them wait; leave scopes with nothing to do out of incremental passes; give history compaction more time and name provider failures; reject relative times per operation and file history by scopes used; keep pass history inside each pass's scopes; keep dates and states out of entity names; only reject relative times that have no absolute date; widen or drop an empty temporal filter instead of returning nothing; replace heuristic content safety with credential redaction; remove ranking rules tuned to LongMemEval questions; poll Dreaming status with bounded concurrency; wait for maintenance admission instead of failing Dreaming; wait for queued transcript captures past the request timeout; let commits that stage only Biome-ignored files pass; file one fact per claim and finish identified work; file each named speaker on their own entity; let instruction-following models file user disclosures; show sign-in for unauthenticated OAuth providers; drop the Pi tool-call budget and queue calls past eight in flight; keep evidence delivery durable when a tool trace is truncated; backfill missing vectors into the active projection slot; ride out provider throttling instead of failing the pass; count an entity as a recall hub only when it is generic; file what users disclose about themselves when asking for advice; record sources whose failed citation a retry filed; keep hygiene failures from withholding read evidence; name the citation whose quote is not verbatim; say why a hygiene op does not match its attention; say when a hygiene op cites an unknown attention id; say which operation and id failed to resolve; keep vector-only recall hits through shaping and dampening; write vectors to the active projection slot; embed new memories without the re-embed repair budget; bound status measure=1 to the backlog probe; keep filed sources when an uncited write fails; let the queue continue partly read sources; bound the backlog probe to sources still waiting; file each evidence page, keep user-specific deliverables; measure the exact backlog for status measure=1; let status measure the backlog on request; keep the graph rendering without entity agent IDs; close new evidence delivery halfway through a pass; withhold evidence when a failed write cannot be attributed; size the Pi agent worker pool from the shared LLM limit; admit no more passes than there are Pi agent workers; admit no more passes than the shared LLM limit; stop capping Dreaming replies below the model's limit; keep content passes and pass failures from stalling Dreaming; stop Dreaming from losing or re-reading queued evidence; close pause guard and unfreeze gaps; keep pipeline pause on one route; control pause and Dreaming; keep setup from re-pausing the pipeline after it resumes; scope session-end assistant writes; align hook and MCP runtime state.
-- Performance: size evidence pages from the Dreaming input budget.
-- Docs: note that pass history is scoped; correct the cost model's per-token rate and cache share; add a Dreaming cost model to the benchmarking skill; advise against gpt-6-luna as a Dreaming model for now; add a benchmarking skill with run tooling and a results ledger; sync translations; list Muse Code in README and site.
-
 ## Release Ledger
+
+## [0.238.0] - 2026-10-26
+
+Release summary: 8 features, 25 bug fixes, 2 performance improvements, and 1 docs update.
+Tag range: `v0.237.21..v0.238.0`.
+
+### Features
+
+- **bench**: set the Dreaming pass timeout for slower local models
+- **memorybench**: cap local answering and judging reasoning with a thinking budget
+- **bench**: override the Dreaming model context window
+- **inference**: cap thinking on local OpenAI-compatible targets
+- **memorybench**: send enable_thinking with the local reasoning effort
+- **bench**: set the Dreaming per-turn output budget for local reasoning models
+- **memorybench**: run answering and judging on local OpenAI-compatible models
+- **daemon**: raise LLM and Dreaming concurrency ceilings to 256
+
+### Bug Fixes
+
+- **inference**: discover the window only for agents
+- **bench**: bound archive retries and clean temp files
+- **dreaming**: report activeAgentId only for that agent
+- **bench**: harden the RunPod kit from review
+- **memorybench**: cap waits at the retry deadline
+- **dreaming**: scope dream status to the agent
+- **transcripts**: repair a torn tail on append
+- **inference**: read the served context window
+- **dreaming**: cap evidence delivered per pass
+- **dreaming**: bound scheduled content sweeps and size passes by maxPassTokens
+- **dreaming**: size passes so they finish and commit instead of livelocking
+- **dreaming**: treat a DB owner deadline on trigger as retryable
+- **pipeline**: count special-token literals in user text instead of throwing
+- **dreaming**: return a retryable 503 when a trigger hits DB owner pressure
+- **memorybench**: resend dropped requests on a fresh connection and name the failed path
+- **memorybench**: keep every question when resuming an unrestricted run
+- **daemon**: page session-claim restore so a busy daemon can restart
+- **memorybench**: keep honoring Retry-After while the capture backlog drains
+- **daemon**: treat a full transcript-capture backlog as retryable write pressure
+- **memorybench**: resend requests the daemon dropped on a pooled connection
+- **inference**: take local targets' context window from the server
+- **memorybench**: create each haystack agent once and retry Signet write pressure
+- **daemon**: surface write pressure as retryable 503s instead of 500s and dropped captures
+- **dreaming**: report running passes in /api/dream/status
+- **bench**: restore the loopback endpoint check for local Dreaming models
+
+### Performance
+
+- **transcripts**: scope the per-agent canonical backfill query to that agent
+- **transcripts**: append a new session's snapshot instead of rewriting the canonical JSONL
+
+### Docs
+
+- record the Qwen3.8-27B vLLM recipe for one Blackwell GPU
+
+## [0.237.21] - 2026-10-25
+
+Release summary: 4 bug fixes, 1 refactor, and 1 docs update.
+Tag range: `v0.237.20..v0.237.21`.
+
+### Bug Fixes
+
+- **daemon**: return primary candidates in fused rank order
+- **daemon**: score the best fused recall hit 1
+- **daemon**: reserve candidate slots for the best vector hits
+- **daemon**: rank keyword and vector hits by position in hybrid recall
+
+### Refactoring
+
+- retire search.alpha
+
+### Docs
+
+- **memory**: state what the hint-only cap guarantees
+
+## [0.237.20] - 2026-10-25
+
+Release summary: 6 bug fixes.
+Tag range: `v0.237.19..v0.237.20`.
+
+### Bug Fixes
+
+- **daemon**: keep rehearsal boost finite for unparseable access times
+- **daemon**: measure hint coverage against the sanitized FTS query
+- **daemon**: count traversal cosine as direct evidence at final rank
+- **daemon**: measure hint coverage with a unicode tokenizer
+- **daemon**: cap hint-only rows by evidence, not source label
+- **daemon**: bound hint and rehearsal contributions to recall scores
+
+## [0.237.19] - 2026-10-25
+
+Release summary: internal maintenance release with no conventional commit entries captured.
+Tag range: `v0.237.18..v0.237.19`.
+
+No notable changes were captured from conventional commit subjects for this release.
+
+## [0.237.18] - 2026-10-25
+
+Release summary: 1 bug fix.
+Tag range: `v0.237.17..v0.237.18`.
+
+### Bug Fixes
+
+- **daemon**: publish head over unrecorded revisions
 
 ## [0.237.17] - 2026-10-24
 
