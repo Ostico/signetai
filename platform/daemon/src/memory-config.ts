@@ -21,6 +21,7 @@ import {
 } from "@signet/core";
 import { type AuthConfig, parseAuthConfig } from "./auth";
 import type { EmbeddingCostRates } from "./embedding-cost";
+import { MAX_LLM_CONCURRENCY } from "./llm-concurrency-limits";
 import { logger } from "./logger";
 
 export interface EmbeddingConfig {
@@ -40,7 +41,6 @@ export interface EmbeddingConfig {
 }
 
 export interface MemorySearchConfig {
-	alpha: number;
 	top_k: number;
 	min_score: number;
 	rehearsal_enabled: boolean;
@@ -84,6 +84,7 @@ const DEFAULT_DREAMING_SURPRISAL = {
 export const DEFAULT_DREAMING: DreamingConfig = {
 	enabled: false,
 	tokenThreshold: 100_000,
+	maxPassTokens: 200_000,
 	maxInterval: 6 * 60 * 60 * 1_000,
 	timeout: 20 * 60 * 1_000,
 	maxInputTokens: 128_000,
@@ -331,8 +332,8 @@ const runtimeSchema = z.object({
 		.prefault({}),
 	search: z
 		.object({
-			alpha: fraction.optional(),
-			top_k: z.number().int().positive().default(20),
+			alpha: z.unknown().optional(),
+			top_k: z.number().int().positive().optional(),
 			min_score: fraction.optional(),
 			rehearsal_enabled: z.boolean().default(true),
 			rehearsal_weight: fraction.default(0.1),
@@ -400,18 +401,24 @@ export function readRuntimeConfig(agentsDir: string): {
 				),
 				...(rates && Object.keys(rates).length ? { costRates: rates } : {}),
 			},
-			search: {
-				...search,
-				alpha: search.alpha ?? 0.7,
-				top_k: search.alpha === undefined ? 20 : search.top_k,
-				min_score: search.alpha === undefined ? 0.1 : (search.min_score ?? 0.3),
-			},
+			search: runtimeSearchConfig(search),
 		};
 	} catch (error) {
 		throw new MemoryConfigValidationError(
 			`${path ?? join(agentsDir, "agent.yaml")}: ${error instanceof Error ? error.message : "invalid runtime configuration"}`,
 		);
 	}
+}
+
+let retiredAlphaWarned = false;
+
+function runtimeSearchConfig(search: z.infer<typeof runtimeSchema>["search"]): MemorySearchConfig {
+	const { alpha, top_k, min_score, ...rest } = search;
+	if (alpha !== undefined && !retiredAlphaWarned) {
+		retiredAlphaWarned = true;
+		logger.warn("config", "search.alpha is retired and ignored; remove it from agent.yaml");
+	}
+	return { ...rest, top_k: top_k ?? 20, min_score: min_score ?? (alpha === undefined ? 0.1 : 0.3) };
 }
 
 function clampFraction(raw: unknown, fallback: number): number {
@@ -462,9 +469,9 @@ function resolveMaxLlmConcurrency(rawValue: unknown, defaultValue: number): numb
 		logger.warn("pipeline", "SIGNET_MAX_LLM_CONCURRENCY is not a valid positive integer, using config/default", {
 			value: env,
 		});
-		return clampPositive(rawValue, 1, 16, defaultValue);
+		return clampPositive(rawValue, 1, MAX_LLM_CONCURRENCY, defaultValue);
 	}
-	return clampPositive(candidate, 1, 16, defaultValue);
+	return clampPositive(candidate, 1, MAX_LLM_CONCURRENCY, defaultValue);
 }
 function envBool(name: string): boolean | undefined {
 	const value = process.env[name];
@@ -975,6 +982,7 @@ export function loadDreamingConfig(yaml: Record<string, unknown>): DreamingConfi
 	return {
 		enabled: typeof raw.enabled === "boolean" ? raw.enabled : dd.enabled,
 		tokenThreshold: clampWarn("tokenThreshold", raw.tokenThreshold, 10_000, 1_000_000, dd.tokenThreshold),
+		maxPassTokens: clampWarn("maxPassTokens", raw.maxPassTokens, 10_000, 2_000_000, dd.maxPassTokens ?? 200_000),
 		maxInterval: clampWarn("maxInterval", raw.maxInterval, 5 * 60 * 1_000, 7 * 24 * 60 * 60 * 1_000, dd.maxInterval),
 		timeout: clampWarn("timeout", raw.timeout, 30_000, 1_800_000, dd.timeout),
 		maxInputTokens: clampWarn("maxInputTokens", raw.maxInputTokens, 8_000, 1_000_000, dd.maxInputTokens),
@@ -983,7 +991,7 @@ export function loadDreamingConfig(yaml: Record<string, unknown>): DreamingConfi
 				? clampWarn("maxOutputTokens", raw.maxOutputTokens, 1_000, 1_000_000, 1_000)
 				: dd.maxOutputTokens,
 		maxConcurrentPasses: Math.floor(
-			clampWarn("maxConcurrentPasses", raw.maxConcurrentPasses, 1, 16, dd.maxConcurrentPasses),
+			clampWarn("maxConcurrentPasses", raw.maxConcurrentPasses, 1, MAX_LLM_CONCURRENCY, dd.maxConcurrentPasses),
 		),
 		codemode: typeof raw.codemode === "boolean" ? raw.codemode : dd.codemode,
 		backfillOnFirstRun: typeof raw.backfillOnFirstRun === "boolean" ? raw.backfillOnFirstRun : dd.backfillOnFirstRun,

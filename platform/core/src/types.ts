@@ -109,7 +109,6 @@ export interface AgentManifest {
 		api_key?: string;
 	};
 	search?: {
-		alpha: number;
 		top_k: number;
 		min_score: number;
 	};
@@ -453,6 +452,7 @@ export interface DreamingSurprisalConfig {
 export interface DreamingConfig {
 	readonly enabled: boolean;
 	readonly tokenThreshold: number;
+	readonly maxPassTokens?: number;
 	readonly maxInterval: number;
 	readonly timeout: number;
 	readonly maxInputTokens: number;
