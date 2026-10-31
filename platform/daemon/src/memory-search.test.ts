@@ -2652,6 +2652,53 @@ describe("hybridRecall", () => {
 		expect(result.results.some((row) => row.source === "native_memory")).toBe(true);
 	});
 
+	it("keeps an in-window Hermes native artifact when an older live mirror is outside the since bound", async () => {
+		const content = "# Hermes memory\n\nSince-bound Hermes mirror window marker.\n";
+		const path = join(dir, "hermes", "memories", "MEMORY.md");
+		mkdirSync(join(dir, "hermes", "memories"), { recursive: true });
+		writeFileSync(path, content);
+		await indexExternalMemoryArtifact({
+			agentId: "default",
+			sourcePath: path,
+			sourceKind: "native_hermes_memory",
+			harness: "hermes-agent",
+			content,
+			sourceMtimeMs: Date.parse("2026-10-28T10:00:00.000Z"),
+		});
+		const mirrorAt = "2026-10-20T10:00:00.000Z";
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO memories (
+					id, content, content_hash, type, source_type, source_id, agent_id,
+					visibility, created_at, updated_at, updated_by, is_deleted
+				) VALUES (?, ?, ?, 'fact', 'hermes-memory-write', ?, 'default', 'global', ?, ?, 'test', 0)`,
+			).run(
+				"hermes-early-mirror",
+				content,
+				normalizeAndHashContent(content).contentHash,
+				"hermes-memory-write:early-mirror",
+				mirrorAt,
+				mirrorAt,
+			);
+		});
+
+		const result = await hybridRecall(
+			{
+				query: "Since-bound Hermes mirror window marker",
+				keywordQuery: "Since-bound Hermes mirror window marker",
+				limit: 5,
+				agentId: "default",
+				readPolicy: "isolated",
+				since: "2026-10-25",
+			},
+			loadMemoryConfig(dir),
+			async () => null,
+		);
+
+		expect(result.results.map((row) => row.id)).not.toContain("hermes-early-mirror");
+		expect(result.results.some((row) => row.source === "native_memory")).toBe(true);
+	});
+
 	it("does not return a Hermes native artifact twice when a live mirror has the same content", async () => {
 		const content = "# Hermes memory\n\nExact Hermes live mirror duplicate marker.\n";
 		const path = join(dir, "hermes", "memories", "MEMORY.md");
