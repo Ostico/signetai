@@ -965,6 +965,21 @@ describe("hybridRecall", () => {
 			add("agent-a", "own-speyer", "user: What is the Speyer tourism board phone number? assistant: +49 6232 142.");
 			add("agent-a", "own-deleted", "user: Speyer tourism board phone number again? assistant: deleted copy.", 1);
 			add("agent-b", "other-speyer", "user: Speyer tourism board phone number for agent b.");
+			db.prepare(
+				`INSERT INTO memory_artifacts (
+					agent_id, source_path, source_sha256, source_kind, session_id, session_token,
+					harness, started_at, captured_at, content, updated_at, is_deleted
+				) VALUES ('agent-a', ?, ?, 'transcript', ?, ?, 'claude-code', ?, ?, ?, ?, 0)`,
+			).run(
+				"transcripts/long-ferry.jsonl",
+				createHash("sha256").update("long-ferry").digest("hex"),
+				"long-ferry",
+				"token-long-ferry",
+				new Date(Date.now() - 3 * 86_400_000).toISOString(),
+				now,
+				"user: When does the Mannheim harbor ferry leave? assistant: Hourly from 08:00.",
+				now,
+			);
 		});
 
 		const recall = async (overrides: Partial<Parameters<typeof hybridRecall>[0]> = {}, limit = 3) =>
@@ -1000,6 +1015,13 @@ describe("hybridRecall", () => {
 		]);
 		const until = await recall({ until: yesterday });
 		expect(until.results.some((row) => row.id.startsWith("transcript:"))).toBe(false);
+
+		// A session that started before the bound is dated by its start, not by its latest capture.
+		const ferry = { query: "Mannheim harbor ferry" };
+		const ferrySince = await recall({ ...ferry, since: yesterday });
+		expect(ferrySince.results.some((row) => row.id === "transcript:long-ferry")).toBe(false);
+		const ferryUntil = await recall({ ...ferry, until: yesterday });
+		expect(ferryUntil.results.map((row) => row.id)).toContain("transcript:long-ferry");
 
 		const disabledCfg = testCfg();
 		const disabled = await hybridRecall(
@@ -2152,6 +2174,16 @@ describe("hybridRecall", () => {
 				now: new Date().toISOString(),
 				sourceType: "source_obsidian_chunk",
 			});
+			db.prepare(
+				`INSERT INTO memories (
+					id, content, type, agent_id, visibility, created_at, updated_at, updated_by, is_deleted
+				) VALUES (?, ?, 'fact', 'default', 'global', ?, ?, 'test', 0)`,
+			).run(
+				"mem-dated-primary",
+				"Dated source marker from a memory row.",
+				"2026-10-31T09:00:00.000Z",
+				"2026-10-31T09:00:00.000Z",
+			);
 		});
 
 		const recall = async (bounds: { since?: string; until?: string }) =>
@@ -2169,6 +2201,7 @@ describe("hybridRecall", () => {
 			);
 
 		const since = await recall({ since: "2026-10-25" });
+		expect(since.results.map((row) => row.id)).toContain("mem-dated-primary");
 		expect(since.results.map((row) => row.content).join("\n")).toContain("newer.md");
 		expect(since.results.map((row) => row.content).join("\n")).not.toContain("older.md");
 		expect(since.results.some((row) => row.id.startsWith("source-chunk:"))).toBe(false);
@@ -2572,6 +2605,53 @@ describe("hybridRecall", () => {
 				},
 		);
 		expect(artifacts.count).toBe(2);
+	});
+
+	it("keeps an in-window Hermes native artifact when its live mirror is outside the date bounds", async () => {
+		const content = "# Hermes memory\n\nDated Hermes mirror window marker.\n";
+		const path = join(dir, "hermes", "memories", "MEMORY.md");
+		mkdirSync(join(dir, "hermes", "memories"), { recursive: true });
+		writeFileSync(path, content);
+		await indexExternalMemoryArtifact({
+			agentId: "default",
+			sourcePath: path,
+			sourceKind: "native_hermes_memory",
+			harness: "hermes-agent",
+			content,
+			sourceMtimeMs: Date.parse("2026-10-20T10:00:00.000Z"),
+		});
+		const mirrorAt = "2026-10-30T10:00:00.000Z";
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO memories (
+					id, content, content_hash, type, source_type, source_id, agent_id,
+					visibility, created_at, updated_at, updated_by, is_deleted
+				) VALUES (?, ?, ?, 'fact', 'hermes-memory-write', ?, 'default', 'global', ?, ?, 'test', 0)`,
+			).run(
+				"hermes-late-mirror",
+				content,
+				normalizeAndHashContent(content).contentHash,
+				"hermes-memory-write:late-mirror",
+				mirrorAt,
+				mirrorAt,
+			);
+		});
+
+		const result = await hybridRecall(
+			{
+				query: "Dated Hermes mirror window marker",
+				keywordQuery: "Dated Hermes mirror window marker",
+				limit: 5,
+				agentId: "default",
+				readPolicy: "isolated",
+				until: "2026-10-25",
+			},
+			loadMemoryConfig(dir),
+			async () => null,
+		);
+
+		expect(result.results.map((row) => row.id)).not.toContain("hermes-late-mirror");
+		expect(result.results.some((row) => row.source === "native_memory")).toBe(true);
 	});
 
 	it("does not return a Hermes native artifact twice when a live mirror has the same content", async () => {

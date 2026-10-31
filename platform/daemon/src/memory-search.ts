@@ -1625,6 +1625,12 @@ async function buildNativeArtifactRecallHits(
 				mirrorParts.push("AND m.scope = ?");
 				mirrorArgs.push(params.scope);
 			} else mirrorParts.push("AND m.scope IS NULL");
+			// A mirror outside the date bounds is not recalled, so it must not hide the artifact either.
+			const mirrorDates = dateBoundsSql("m.created_at", params);
+			if (mirrorDates.sql) {
+				mirrorParts.push(mirrorDates.sql);
+				mirrorArgs.push(...mirrorDates.args);
+			}
 			mirrorParts.push(`AND m.content_hash IN (${hashPlaceholders})`);
 			mirrorArgs.push(...candidateHashes);
 			const mirrorRows = await ownerReadAll<{ readonly content_hash: string | null }>(
