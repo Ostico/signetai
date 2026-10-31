@@ -85,9 +85,6 @@ export function buildMemorySearchFilterClause(params: MemorySearchFilterInput): 
 export function hasMemoryMetadataFilters(params: MemorySearchFilterInput): boolean {
 	return hasMemoryOnlyFilters(params) || hasDateBounds(params);
 }
-
-// Filters that only memory rows can satisfy. Source artifacts carry their own
-// time, so date bounds are not among them; each source lane applies them itself.
 export function hasMemoryOnlyFilters(params: MemorySearchFilterInput): boolean {
 	const hasTags =
 		params.tags
@@ -107,8 +104,6 @@ export function hasMemoryOnlyFilters(params: MemorySearchFilterInput): boolean {
 export function hasDateBounds(params: MemorySearchFilterInput): boolean {
 	return params.since !== undefined || params.until !== undefined;
 }
-
-// Same comparison as the memory filter above, applied to a source row's time.
 export function dateBoundsSql(column: string, params: MemorySearchFilterInput): { sql: string; args: string[] } {
 	const parts: string[] = [];
 	const args: string[] = [];

@@ -1015,8 +1015,6 @@ describe("hybridRecall", () => {
 		]);
 		const until = await recall({ until: yesterday });
 		expect(until.results.some((row) => row.id.startsWith("transcript:"))).toBe(false);
-
-		// A session that started before the bound is dated by its start, not by its latest capture.
 		const ferry = { query: "Mannheim harbor ferry" };
 		const ferrySince = await recall({ ...ferry, since: yesterday });
 		expect(ferrySince.results.some((row) => row.id === "transcript:long-ferry")).toBe(false);

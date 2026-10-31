@@ -1550,7 +1550,6 @@ async function buildNativeArtifactRecallHits(
 		const agentId = params.agentId ?? "default";
 		const artifactLimit = Math.max(2, Math.min(50, params.limit ?? 10) + existingSourceIds.size);
 		const artifactProject = params.project ? "AND (ma.project = ? OR ma.project IS NULL)" : "";
-		// captured_at is the source file's modification time; updated_at is when it was indexed.
 		const artifactDates = dateBoundsSql("ma.captured_at", params);
 		const rows = await ownerReadAll<{
 			rowid: number;
@@ -1625,7 +1624,6 @@ async function buildNativeArtifactRecallHits(
 				mirrorParts.push("AND m.scope = ?");
 				mirrorArgs.push(params.scope);
 			} else mirrorParts.push("AND m.scope IS NULL");
-			// A mirror outside the date bounds is not recalled, so it must not hide the artifact either.
 			const mirrorDates = dateBoundsSql("m.created_at", params);
 			if (mirrorDates.sql) {
 				mirrorParts.push(mirrorDates.sql);
@@ -2914,7 +2912,6 @@ export async function hybridRecall(
 		ontologyClaimToRecallResult(candidate, recallTruncate),
 	);
 	const allowArtifactFallbacks = temporalCandidateSet.size === 0 && !hasMemoryOnlyFilters(params);
-	// A source chunk's created_at is its embedding time, not the content's, so date bounds skip that lane.
 	const allowSourceFallbacks = allowArtifactFallbacks && !hasDateBounds(params);
 	let sourceChunkSearchDiagnostics: SourceChunkVectorDiagnostics | undefined;
 
