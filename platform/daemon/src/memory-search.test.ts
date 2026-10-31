@@ -993,6 +993,14 @@ describe("hybridRecall", () => {
 		const filtered = await recall({ type: "fact" });
 		expect(filtered.results.some((row) => row.id.startsWith("transcript:"))).toBe(false);
 
+		const yesterday = new Date(Date.now() - 86_400_000).toISOString();
+		const since = await recall({ since: yesterday });
+		expect(since.results.filter((row) => row.id.startsWith("transcript:")).map((row) => row.id)).toEqual([
+			"transcript:own-speyer",
+		]);
+		const until = await recall({ until: yesterday });
+		expect(until.results.some((row) => row.id.startsWith("transcript:"))).toBe(false);
+
 		const disabledCfg = testCfg();
 		const disabled = await hybridRecall(
 			{ query: "Speyer tourism board phone number", limit: 3, agentId: "agent-a", readPolicy: "isolated" },
@@ -2113,6 +2121,63 @@ describe("hybridRecall", () => {
 
 		expect(result.results).toEqual([]);
 		expect(result.meta.noHits).toBe(true);
+	});
+
+	it("applies since and until to native artifacts by file time and skips source chunks", async () => {
+		await markActiveEmbeddingProfileKnown();
+		const vec = unitVector();
+		const dirPath = join(dir, "codex", "memories", "rollout_summaries");
+		mkdirSync(dirPath, { recursive: true });
+		const index = async (name: string, mtime: string): Promise<void> => {
+			const path = join(dirPath, name);
+			writeFileSync(path, `# ${name}\n\nDated source marker in ${name}.\n`);
+			await indexExternalMemoryArtifact({
+				agentId: "default",
+				sourcePath: path,
+				sourceKind: "native_rollout_summary",
+				harness: "codex",
+				content: readFileSync(path, "utf-8"),
+				sourceMtimeMs: Date.parse(mtime),
+			});
+		};
+		await index("older.md", "2026-10-20T10:00:00.000Z");
+		await index("newer.md", "2026-10-30T10:00:00.000Z");
+		getDbAccessor().withWriteTx((db) => {
+			seedSourceChunkVectorFixture(db, {
+				id: "emb-dated-source",
+				hash: "hash-dated-source",
+				vector: vectorBlob(vec),
+				sourceId: "obsidian:vault:dated-source.md#overview:1-1:0",
+				chunkText: "source_path: /vault/dated-source.md\nDated source marker from source chunk.",
+				now: new Date().toISOString(),
+				sourceType: "source_obsidian_chunk",
+			});
+		});
+
+		const recall = async (bounds: { since?: string; until?: string }) =>
+			await hybridRecall(
+				{
+					query: "Dated source marker",
+					keywordQuery: "Dated source marker",
+					limit: 5,
+					agentId: "default",
+					readPolicy: "isolated",
+					...bounds,
+				},
+				testCfg(),
+				async () => vec,
+			);
+
+		const since = await recall({ since: "2026-10-25" });
+		expect(since.results.map((row) => row.content).join("\n")).toContain("newer.md");
+		expect(since.results.map((row) => row.content).join("\n")).not.toContain("older.md");
+		expect(since.results.some((row) => row.id.startsWith("source-chunk:"))).toBe(false);
+		expect(since.results.find((row) => row.source === "native_memory")?.created_at).toBe("2026-10-30T10:00:00.000Z");
+
+		const until = await recall({ until: "2026-10-25" });
+		expect(until.results.map((row) => row.content).join("\n")).toContain("older.md");
+		expect(until.results.map((row) => row.content).join("\n")).not.toContain("newer.md");
+		expect(until.results.some((row) => row.id.startsWith("source-chunk:"))).toBe(false);
 	});
 
 	it("falls back to keyword recall when embedding throws synchronously", async () => {
