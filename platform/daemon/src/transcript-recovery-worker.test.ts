@@ -42,6 +42,24 @@ function writeSettled(path: string, content: string): void {
 	utimesSync(path, settled, settled);
 }
 
+function isProcessAlive(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+async function waitForProcessExit(pid: number, timeoutMs = 5_000): Promise<boolean> {
+	const deadline = Date.now() + timeoutMs;
+	while (isProcessAlive(pid)) {
+		if (Date.now() >= deadline) return false;
+		await Bun.sleep(10);
+	}
+	return true;
+}
+
 async function scan(nowMs = Date.now()) {
 	return runTranscriptRecoveryScan(getDbAccessor(), dir, "agent-a", {
 		roots: { claudeCode: claudeRoot, codex: codexRoot },
@@ -682,16 +700,7 @@ describe("transcript recovery worker", () => {
 		expect(Number.isInteger(targetPid)).toBe(true);
 		await handle.stop();
 		expect(handle.running).toBe(false);
-		let targetAlive = true;
-		for (let attempt = 0; attempt < 100 && targetAlive; attempt++) {
-			try {
-				process.kill(targetPid, 0);
-			} catch {
-				targetAlive = false;
-			}
-			if (targetAlive) await Bun.sleep(5);
-		}
-		expect(targetAlive).toBe(false);
+		expect(await waitForProcessExit(targetPid)).toBe(true);
 	}, 10_000);
 
 	it("kills the recovery target when its PID handshake is delayed", async () => {
@@ -722,18 +731,7 @@ describe("transcript recovery worker", () => {
 		expect(targetPid).toBeGreaterThan(0);
 		try {
 			await handle.stop();
-			let targetAlive = false;
-			for (let attempt = 0; attempt < 100; attempt++) {
-				targetAlive = true;
-				try {
-					process.kill(targetPid, 0);
-				} catch {
-					targetAlive = false;
-					break;
-				}
-				await Bun.sleep(5);
-			}
-			expect(targetAlive).toBe(false);
+			expect(await waitForProcessExit(targetPid)).toBe(true);
 		} finally {
 			try {
 				process.kill(targetPid, "SIGKILL");
@@ -1000,23 +998,8 @@ describe("transcript recovery worker", () => {
 			for (let attempt = 0; attempt < 200 && !existsSync(childPidPath); attempt++) await Bun.sleep(5);
 			expect(existsSync(childPidPath)).toBe(true);
 			parent.kill("SIGKILL");
-			let childAlive = true;
-			for (let attempt = 0; attempt < 200 && childAlive; attempt++) {
-				try {
-					process.kill(Number(readFileSync(childPidPath, "utf8")), 0);
-				} catch {
-					childAlive = false;
-				}
-				if (childAlive) await Bun.sleep(5);
-			}
-			expect(childAlive).toBe(false);
-			let supervisorAlive = true;
-			try {
-				process.kill(Number(readFileSync(supervisorPidPath, "utf8")), 0);
-			} catch {
-				supervisorAlive = false;
-			}
-			expect(supervisorAlive).toBe(false);
+			expect(await waitForProcessExit(Number(readFileSync(childPidPath, "utf8")))).toBe(true);
+			expect(await waitForProcessExit(Number(readFileSync(supervisorPidPath, "utf8")))).toBe(true);
 			const database = new Database(databasePath);
 			try {
 				database.exec("PRAGMA busy_timeout = 1000");
